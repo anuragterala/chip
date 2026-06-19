@@ -110,11 +110,27 @@ def extract_sms_keyword(text: str) -> str:
             return m.group(1).upper()
     return ""
 
-def is_promo_text(text: str) -> bool:
+STRONG_SIGNALS = [
+    "888222",
+    "text to win",
+    "free entree",
+    "free burrito",
+    "promo code",
+    "first 10,000",
+    "first 5,000",
+    "first 1,000",
+    "limited codes",
+    "while supplies last",
+]
+
+def is_promo_text(text: str, strong_only: bool = False) -> bool:
     t = text.lower()
     chipotle_ref = any(w in t for w in ["chipotle", "burrito", "guac", "888222"])
+    has_strong = any(s in t for s in STRONG_SIGNALS)
+    if strong_only:
+        return chipotle_ref and has_strong
     signal_count = sum(1 for kw in PROMO_KEYWORDS if kw in t)
-    return chipotle_ref and signal_count >= 2
+    return chipotle_ref and (has_strong or signal_count >= 3)
 
 # ─── TWITTER FILTERED STREAM (real-time, push-based) ─────────────────────────
 
@@ -260,7 +276,7 @@ def check_chipotle_website():
             if content_hash == last_chipotle_hash:
                 continue
             last_chipotle_hash = content_hash
-            if is_promo_text(text):
+            if is_promo_text(text, strong_only=True):
                 keyword = extract_sms_keyword(text)
                 log.info(f"🌐 Chipotle website change detected: {url}")
                 send_discord_alert(
