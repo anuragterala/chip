@@ -1,0 +1,26 @@
+[Unit]
+Description=Chipotle promo code monitor (Twitter engine)
+After=network-online.target
+Wants=network-online.target
+# Crash-rate limit lives in [Unit]: if it fails 5x in 60s, stop retrying.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Adjust User and paths to match your VM.
+User=chipotle
+WorkingDirectory=/opt/chipotle-monitor
+EnvironmentFile=/opt/chipotle-monitor/.env
+ExecStart=/opt/chipotle-monitor/venv/bin/python /opt/chipotle-monitor/chipotle_monitor.py
+
+# Reliability: restart on any crash or reboot, with a short backoff.
+Restart=always
+RestartSec=5
+
+# Send stdout/stderr to the journal (view with: journalctl -u chipotle-monitor -f)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

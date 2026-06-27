@@ -1,2 +1,1 @@
-requests
-twitter-cli
+requests>=2.31
