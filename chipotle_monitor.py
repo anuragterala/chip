@@ -49,6 +49,9 @@ import requests
 
 DISCORD_WEBHOOK    = os.environ.get("DISCORD_WEBHOOK", "").strip()
 TWITTERAPI_KEY     = os.environ.get("TWITTERAPI_KEY", "").strip()
+# Optional separate webhook for the "alive" heartbeat (keep it out of the alert
+# channel). Falls back to the main webhook if unset.
+HEARTBEAT_WEBHOOK  = os.environ.get("HEARTBEAT_WEBHOOK", "").strip() or DISCORD_WEBHOOK
 
 CHIPOTLE_SHORTCODE = "888222"
 POLL_INTERVAL      = int(os.environ.get("POLL_INTERVAL", "6"))
@@ -187,9 +190,9 @@ def search_tweets(since_unix, cursor=""):
 
 # ─── DISCORD ──────────────────────────────────────────────────────────────────
 
-def _post_discord(payload, what):
+def _post_discord(payload, what, url=None):
     try:
-        r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+        r = requests.post(url or DISCORD_WEBHOOK, json=payload, timeout=10)
         if r.status_code in (200, 204):
             return True
         log.warning(f"Discord {what} {r.status_code}: {r.text[:200]}")
@@ -216,6 +219,7 @@ def send_heartbeat():
             f"Last check {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC."
         )},
         "heartbeat",
+        url=HEARTBEAT_WEBHOOK,
     )
 
 
