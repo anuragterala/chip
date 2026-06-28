@@ -52,9 +52,8 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("ocr_monitor")
 
-# Same anchored patterns as the Twitter engine: a code token right before "to 888222".
-KEYWORD_RE   = re.compile(r"([A-Z0-9]{4,16})\s+to\s+888[-\s]?222", re.IGNORECASE)
-SHORTCODE_RE = re.compile(r"888[-\s]?222")
+# Same anchor as the Twitter engine: a code token right before "to 888222".
+KEYWORD_RE = re.compile(r"([A-Z0-9]{4,16})\s+to\s+888[-\s]?222", re.IGNORECASE)
 
 seen    = set()   # codes already alerted
 pending = {}      # code -> times seen; require 2 to beat one-frame OCR noise
@@ -98,15 +97,28 @@ def start_stream():
         stdin=sl.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return sl, ff
 
-def ocr_banner(path):
-    """OCR just the bottom giveaway banner (cropped + upscaled). This is what
-    made reads exact in testing: 34/34 frames -> correct code, 0 misreads."""
+def _ocr(img):
+    return pytesseract.image_to_string(img, config="--psm 11")
+
+def read_frame_codes(path):
+    """Extract codes from a frame. First OCR the bottom giveaway banner (cropped
+    + upscaled) — exact on Evo's layout (34/34, 0 misreads). If that yields
+    nothing (e.g. a different event puts the code elsewhere), fall back to a
+    full-frame pass so we still catch unknown layouts. Majority-vote + the
+    2-sighting check downstream cancel the noisier full-frame reads."""
     im = Image.open(path)
     w, h = im.size
+
+    # 1) Banner crop (precise path)
     crop = (im.crop((0, int(h * BANNER_TOP_FRAC), w, h))
               .convert("L")
               .resize((w * 2, int(h * (1 - BANNER_TOP_FRAC)) * 2)))
-    return pytesseract.image_to_string(crop, config="--psm 11")
+    codes = extract_codes(_ocr(crop))
+    if codes:
+        return codes
+
+    # 2) Full-frame fallback (layout-agnostic) — only when the banner found nothing
+    return extract_codes(_ocr(im))
 
 def extract_codes(text):
     return {m.group(1).upper() for m in KEYWORD_RE.finditer(text.upper())}
@@ -134,17 +146,14 @@ def main():
             if not os.path.exists(FRAME_FILE):
                 time.sleep(OCR_INTERVAL); continue
 
-            text = ocr_banner(FRAME_FILE)
-
-            if SHORTCODE_RE.search(text):
-                for code in extract_codes(text):
-                    if code in seen:
-                        continue
-                    pending[code] = pending.get(code, 0) + 1
-                    if pending[code] >= 2:        # stability check vs OCR noise
-                        seen.add(code); pending.pop(code, None)
-                        log.info(f"🎯 OCR HIT {code}")
-                        alert(code)
+            for code in read_frame_codes(FRAME_FILE):
+                if code in seen:
+                    continue
+                pending[code] = pending.get(code, 0) + 1
+                if pending[code] >= 2:        # stability check vs OCR noise
+                    seen.add(code); pending.pop(code, None)
+                    log.info(f"🎯 OCR HIT {code}")
+                    alert(code)
 
             # heartbeat so you know it's alive while nothing's dropping
             if time.time() - last_seen_log > 120:
