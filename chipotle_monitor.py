@@ -43,6 +43,12 @@ import time
 import logging
 from datetime import datetime, timezone
 
+try:
+    from zoneinfo import ZoneInfo          # py3.9+ stdlib
+    _HAVE_ZONEINFO = True
+except ImportError:                        # pragma: no cover
+    _HAVE_ZONEINFO = False
+
 import requests
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -58,6 +64,26 @@ POLL_INTERVAL      = int(os.environ.get("POLL_INTERVAL", "6"))
 OVERLAP_SECONDS    = int(os.environ.get("OVERLAP_SECONDS", "20"))
 HEARTBEAT_HOURS    = float(os.environ.get("HEARTBEAT_HOURS", "6"))
 CODE_LOG_FILE      = os.environ.get("CODE_LOG_FILE", "codes_log.jsonl")
+
+# ─── SCHEDULE-AWARE POLLING ─────────────────────────────────────────────────
+# Codes drop on a tight, predictable schedule (backtest of 37 real text codes:
+# golf "Hot Streak" is 100% Thu-Sun afternoons ET; hockey is rare Feb tournament
+# bursts). Cost is ~per-poll, so polling fast 24/7 burns ~$30/mo mostly at 3am
+# Tuesday for nothing. We poll FAST (POLL_INTERVAL) inside drop windows and SLOW
+# (POLL_SLOW) otherwise. FAIL-OPEN by design: off-window is *slow, never paused*,
+# and any schedule error (or missing tz data) reverts to FAST — so the worst a
+# wrong schedule can do is "caught a bit late", never "missed". The since_time
+# lookback in poll_cycle scales with whichever interval this picks, so slow
+# periods never drop tweets in the gap. SCHEDULE_ENABLED=0 -> flat POLL_INTERVAL.
+SCHEDULE_ENABLED = os.environ.get("SCHEDULE_ENABLED", "1") != "0"
+POLL_SLOW        = int(os.environ.get("POLL_SLOW", "60"))        # off-window baseline
+SCHEDULE_TZ      = os.environ.get("SCHEDULE_TZ", "America/New_York")
+FAST_DAYS        = {3, 4, 5, 6}   # Mon=0..Sun=6 -> Thu,Fri,Sat,Sun (PGA rounds)
+FAST_START_HOUR  = int(os.environ.get("FAST_START_HOUR", "10"))  # local (ET), inclusive
+FAST_END_HOUR    = int(os.environ.get("FAST_END_HOUR", "20"))    # local (ET), exclusive
+# Manual fast windows for known one-off events (Olympic/major hockey, etc.):
+# inclusive local-date ranges. Add as events approach, e.g. ("2026-02-11","2026-02-22").
+EVENT_WINDOWS    = []
 
 # On startup, mark codes already circulating as "seen" so we don't re-announce
 # old codes (e.g. a code from yesterday still being reposted). Looks back this
@@ -109,9 +135,21 @@ KEYWORD_RE = re.compile(r"([A-Za-z0-9]{4,16})\s+to\s+888[-\s]?222(?![\d-])", re.
 
 
 def extract_keyword(text):
-    """Return the keyword to text to 888222 (uppercased), or '' if none found."""
+    """Return the keyword to text to 888222 (uppercased), or '' if none found.
+
+    Requires the token to contain a digit. Real Chipotle codes are always
+    alphanumeric with digits (GLE538, ZRQ792, CART60748, PWVER7771); a backtest
+    of 37 real text codes found every one carried a digit. Generic announcement
+    tweets ("text the code to 888222", with the code shown only in an image/Reel
+    — e.g. Super Bowl, NBA Finals) otherwise mis-extract the filler word (CODE,
+    DROP, THAT, IMAGE) and fire a false @everyone alert. The digit guard drops
+    those; such tweets then fall through to the existing "shortcode w/o parseable
+    code" log, which is the correct OCR-case signal."""
     m = KEYWORD_RE.search(text or "")
-    return m.group(1).upper() if m else ""
+    if not m:
+        return ""
+    kw = m.group(1).upper()
+    return kw if any(c.isdigit() for c in kw) else ""
 
 
 def has_shortcode(text):
@@ -323,8 +361,32 @@ def process_tweets(tweets, alert=True):
     return hits
 
 
-def poll_cycle():
-    since = int(time.time()) - POLL_INTERVAL - OVERLAP_SECONDS
+def current_interval():
+    """Seconds to wait before the next poll: FAST (POLL_INTERVAL) inside a known
+    drop window — Thu-Sun afternoons ET (golf) or a manual EVENT_WINDOW — else
+    SLOW (POLL_SLOW). FAIL-OPEN: scheduling off, missing tz data, or any error
+    returns FAST, so a bad schedule degrades to 'always fast' (the old behavior),
+    never to 'blind'."""
+    if not SCHEDULE_ENABLED or not _HAVE_ZONEINFO:
+        return POLL_INTERVAL
+    try:
+        now = datetime.now(ZoneInfo(SCHEDULE_TZ))
+        today = now.date().isoformat()
+        for start, end in EVENT_WINDOWS:
+            if start <= today <= end:
+                return POLL_INTERVAL
+        if now.weekday() in FAST_DAYS and FAST_START_HOUR <= now.hour < FAST_END_HOUR:
+            return POLL_INTERVAL
+        return POLL_SLOW
+    except Exception as e:
+        log.warning(f"schedule check failed, defaulting to fast poll: {e}")
+        return POLL_INTERVAL
+
+
+def poll_cycle(lookback):
+    # lookback covers the full gap since the last poll (interval + overlap) so a
+    # slow window never leaves a hole between polls.
+    since = int(time.time()) - lookback
     tweets, _, _ = search_tweets(since)
     hits = process_tweets(tweets, alert=True)
     if hits:
@@ -380,6 +442,12 @@ def main():
 
     log.info("🌯 Chipotle monitor (twitterapi.io) starting...")
     log.info(f"  query={SEARCH_QUERY!r} interval={POLL_INTERVAL}s heartbeat={HEARTBEAT_HOURS}h")
+    if SCHEDULE_ENABLED and _HAVE_ZONEINFO:
+        log.info(f"  schedule-aware: fast={POLL_INTERVAL}s in-window, slow={POLL_SLOW}s "
+                 f"off-window (Thu-Sun {FAST_START_HOUR}:00-{FAST_END_HOUR}:00 {SCHEDULE_TZ}"
+                 f"{' + ' + str(len(EVENT_WINDOWS)) + ' event window(s)' if EVENT_WINDOWS else ''})")
+    elif SCHEDULE_ENABLED and not _HAVE_ZONEINFO:
+        log.warning("  schedule-aware requested but zoneinfo unavailable -> flat fast poll")
 
     send_startup_ping()
     load_seen_from_log()
@@ -387,8 +455,9 @@ def main():
 
     last_heartbeat = time.time()
     while True:
+        interval = current_interval()
         try:
-            poll_cycle()
+            poll_cycle(interval + OVERLAP_SECONDS)
         except Exception as e:
             log.error(f"poll cycle error: {e}")
 
@@ -396,7 +465,7 @@ def main():
             send_heartbeat()
             last_heartbeat = time.time()
 
-        time.sleep(POLL_INTERVAL)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
