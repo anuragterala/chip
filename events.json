@@ -1,0 +1,49 @@
+{
+  "_README": "Seed registry of Chipotle-sponsored STREAM events that need OCR. Built from a backtest of the competitor's 3-month code history: on-screen 888222 codes come from FGC/esports majors. Golf (@PGATOUR) codes are TEXT-posted and handled by the Twitter engine, so they are NOT listed here. Confirm channel + exact stream window near each date; 'candidate' = sponsorship/channel not yet verified. The future supervisor will auto-run evo_ocr_monitor.py during each window.",
+  "events": [
+    {
+      "name": "Evo 2026 Finals (Day 3)",
+      "platform": "twitch",
+      "channel": "evo",
+      "start": "2026-06-28T13:00:00-07:00",
+      "end":   "2026-06-28T22:30:00-07:00",
+      "banner_frac": 0.82,
+      "confidence": "confirmed",
+      "notes": "Presented by Chipotle. GLE538 caught on-screen here 6/27. SF6 finals 6:30pm PT, Tekken 2pm PT."
+    },
+    {
+      "name": "Get On My Level 2026 (Canadian FGC Champs)",
+      "platform": "twitch",
+      "channel": "CONFIRM",
+      "start": "2026-07-31",
+      "end":   "2026-08-03",
+      "banner_frac": 0.82,
+      "confidence": "candidate",
+      "notes": "FGC major. Confirm Chipotle sponsorship + Twitch channel + finals times closer to date."
+    },
+    {
+      "name": "CEO 2026",
+      "platform": "twitch",
+      "channel": "ceogaming",
+      "start": "2026-08-14",
+      "end":   "2026-08-16",
+      "banner_frac": 0.82,
+      "confidence": "candidate",
+      "notes": "Major SF6 event in Orlando. Channel likely twitch.tv/ceogaming. Confirm Chipotle drops."
+    },
+    {
+      "name": "BITE 8 (Beast in the East)",
+      "platform": "twitch",
+      "channel": "CONFIRM",
+      "start": "2026-08-22",
+      "end":   "2026-08-24",
+      "banner_frac": 0.82,
+      "confidence": "candidate",
+      "notes": "Regional FGC major. Confirm sponsorship + channel."
+    }
+  ],
+  "handled_elsewhere": {
+    "golf_PGATOUR": "Text-posted by @PGATOUR on PGA tournament days (Thu-Sun) -> caught by the Twitter engine, no OCR needed.",
+    "creator_vanity": "Sporadic Team-Chipotle creator streams (CHIPOTLEBOYS etc.) -> not predictable; Twitter wide-net is the backstop."
+  }
+}
