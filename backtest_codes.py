@@ -97,6 +97,15 @@ def extract_keyword(text):
     return m.group(1).upper() if m else ""
 
 
+def parse_created(s):
+    """Twitter's createdAt ('Wed Jun 28 18:05:54 +0000 2026') -> datetime, or None.
+    Needed because the raw string sorts by weekday, not chronologically."""
+    try:
+        return datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y")
+    except (ValueError, TypeError):
+        return None
+
+
 def guess_event(author, text):
     """Best-effort sport/event tag — a hint for eyeballing, not authoritative."""
     a = (author or "").lower()
@@ -190,17 +199,20 @@ def main():
                 continue
             author = (tw.get("author") or {}).get("userName") or "?"
             created = tw.get("createdAt") or tw.get("created_at") or ""
+            dt = parse_created(created)
+            sort_key = dt.timestamp() if dt else float("inf")  # unparseable -> end
+            iso = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M") if dt else created
             # keep earliest sighting per code (= when the drop broke)
             prev = codes.get(code)
-            if prev is None or (created and created < prev["_sort"]):
+            if prev is None or sort_key < prev["_sort"]:
                 codes[code] = {
-                    "date": created,
+                    "date": iso,
                     "source": author,
                     "code": code,
                     "event_guess": guess_event(author, text),
                     "url": f"https://x.com/{author}/status/{tw.get('id','')}",
                     "text": text.replace("\n", " ")[:200],
-                    "_sort": created or "z",
+                    "_sort": sort_key,
                 }
 
         log.info(f"page {pages}: +{len(tweets)} tweets, {total_tweets} total, "
